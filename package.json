@@ -1,21 +1,22 @@
 {
-  "name": "ip-tag",
+  "name": "graphite",
   "types": ["module"],
   "version": "1.4",
-  "homepage": "http://github.com/shinken-monitoring/mod-ip-tag",
+  "homepage": "http://github.com/shinken-monitoring/mod-graphite",
   "author": "Jean Gabès",
-  "description": "Tag host by their IP ranges",
+  "description": "Export host and service performance data to Graphite carbon",
   "contributors": [
     {
       "name": "Jean Gabès",
       "email": "naparuba@gmail.com"
     }
   ],
-  "repository": "https://github.com/shinken-monitoring/mod-ip-tag",
+  "repository": "https://github.com/shinken-monitoring/mod-graphite",
   "keywords": [
     "module",
-    "arbiter",
-    "ip"
+    "broker",
+    "graphite",
+    "carbon"
   ],
   "dependencies": {
     "shinken": ">=1.4"
