@@ -291,4 +291,4 @@ class Graphite_broker(BaseModule):
             except IOError:
                 self.ticks += 1
                 logger.error("[Graphite broker] Sending data Failed. Buffering state : %s / %s"
-                             % (self.ticks, self.tick_limits))
+                             % (self.ticks, self.tick_limit))
