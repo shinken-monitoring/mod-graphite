@@ -60,7 +60,6 @@ class Graphite_broker(BaseModule):
     def __init__(self, modconf):
         BaseModule.__init__(self, modconf)
         self.host = getattr(modconf, 'host', 'localhost')
-        self.port = int(getattr(modconf, 'port', '2003'))
         self.use_pickle = getattr(modconf, 'use_pickle', '0') == '1'
         if self.use_pickle:
             self.port = int(getattr(modconf, 'port', '2004'))
