@@ -66,6 +66,13 @@ class Graphite_broker(BaseModule):
         else:
             self.port = int(getattr(modconf, 'port', '2003'))
         self.tick_limit = int(getattr(modconf, 'tick_limit', '300'))
+        # Used to reset check time into the scheduled time. 
+        # Carbon/graphite does not like latency data and creates blanks in graphs
+        # Every data with "small" latency will be considered create at scheduled time
+        self.ignore_latency_limit = \
+            int(getattr(modconf, 'ignore_latency_limit', '0'))
+        if self.ignore_latency_limit < 0:
+            self.ignore_latency_limit = 0
         self.buffer = []
         self.ticks = 0
         self.host_dict = {}
@@ -177,7 +184,13 @@ class Graphite_broker(BaseModule):
             if '_GRAPHITE_POST' in customs_datas:
                 desc = ".".join((desc, customs_datas['_GRAPHITE_POST']))
 
-        check_time = int(data['last_chk'])
+        if self.ignore_latency_limit >= data['latency'] > 0:
+            check_time = int(data['last_chk']) - int(data['latency'])
+            logger.info("[Graphite broker] Ignoring latency for service %s. Latency : %s",
+                data['service_description'], data['latency'])
+        else:
+            check_time = int(data['last_chk']) 
+
 
         #try:
         #    logger.debug("[Graphite broker] Hostname: %s, Desc: %s, check time: %d, perfdata: %s"
@@ -229,8 +242,14 @@ class Graphite_broker(BaseModule):
             customs_datas = self.host_dict[data['host_name']]
             if '_GRAPHITE_PRE' in customs_datas:
                 hname = ".".join((customs_datas['_GRAPHITE_PRE'], hname))
+        
+        if self.ignore_latency_limit >= data['latency'] > 0:
+            check_time = int(data['last_chk']) - int(data['latency'])
+            logger.info("[Graphite broker] Ignoring latency for host %s. Latency : %s",
+                data['host_name'], data['latency'])
+        else:
+            check_time = int(data['last_chk'])
 
-        check_time = int(data['last_chk'])
 
         #try:
         #    logger.debug("[Graphite broker] Hostname %s, check time: %d, perfdata: %s"
