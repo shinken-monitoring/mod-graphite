@@ -64,7 +64,8 @@ class TestModGraphite(ShinkenTest):
              'port': '12345',
              'host': '127.0.0.1',
              'use_pickle': '1',
-             'tick_limit': '300', })
+             'tick_limit': '300',
+             'ignore_latency_limit': '10',})
         self.setup_with_file('etc/shinken_1r_1h_1s.cfg')
         self.graphite_broker = Graphite_broker(modconf)
         print "Cleaning old broks?"
@@ -97,6 +98,15 @@ class TestModGraphite(ShinkenTest):
         self.conn_serv.close()
         self.sock_serv.close()
 
+    def unpack_data(self, output):
+        data = []
+        nb_packet = 0
+        while len(output) > 0:
+            sizep = struct.unpack("!L", output[:4])[0]
+            data.append(cPickle.loads(output[4:4+sizep]))
+            output = output[4+sizep:]
+        return data
+
 
     def test_big_chunks(self):
         self.print_header()
@@ -120,13 +130,38 @@ class TestModGraphite(ShinkenTest):
         self.graphite_broker.chunk_size = 1
         self.graphite_broker.hook_tick("DUMMY")
         output = self.conn_serv.recv(2048)
-        data = []
-        nb_packet = 0
-        while len(output) > 0:
-            sizep = struct.unpack("!L", output[:4])[0]
-            data.append(cPickle.loads(output[4:4+sizep]))
-            output = output[4+sizep:]
+        data = self.unpack_data(output)
         self.assert_(len(data) == 6)
+
+    def test_ignore_latency_limit(self):
+        self.print_header()
+
+        host = self.sched.hosts.find_by_name("test_host_0")
+        host.checks_in_progress = []
+        host.act_depend_of = []  # ignore the router
+        svc = self.sched.services.find_srv_by_name_and_hostname("test_host_0", "test_ok_0")
+
+        # To make tests quicker we make notifications send very quickly
+        svc.notification_interval = 0.001
+
+        svc.checks_in_progress = []
+        svc.act_depend_of = []  # no hostchecks on critical checkresults
+
+        # Get the Pending => UP lines
+        self.scheduler_loop(1, [[host, 0, 'UP']], do_sleep=True, sleep_time=0.1)
+        self.scheduler_loop(1, [[svc, 0, 'OK | time=1s;3;4;5;6']], do_sleep=True, sleep_time=0.1)
+        broks = [b for i, b in self.sched.brokers['Default-Broker']['broks'].items() if b.type == 'service_check_result']
+        self.assert_(len(broks) == 1)
+        broks[0].prepare()
+        broks[0].data['latency'] = 5  #Hack to fake latency
+        last = broks[0].data['last_chk']
+        self.update_broker()
+        self.graphite_broker.hook_tick("DUMMY")
+        output = self.conn_serv.recv(2048)
+        data = self.unpack_data(output)
+        self.assert_(int(data[0][2][1][0]) == last - 5)
+
+
 
 if __name__ == '__main__':
     unittest.main()
