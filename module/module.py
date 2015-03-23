@@ -257,8 +257,9 @@ class Graphite_broker(BaseModule):
         #except UnicodeEncodeError:
         #    pass
 
+        # Use hosted graphite API key for graphite data source, swap order so it works
         if self.graphite_data_source:
-            path = '.'.join((hname, self.graphite_data_source))
+            path = '.'.join((self.graphite_data_source,hname))
         else:
             path = hname
 
