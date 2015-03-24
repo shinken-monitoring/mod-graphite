@@ -258,15 +258,16 @@ class Graphite_broker(BaseModule):
         #    pass
 
         # If present prepend API key to value as per http://www.hostedgraphite.com
+        path_elements = []
+
         if self.hosted_graphite_api_key:
-            path = '.'.join(self.hosted_graphite_api_key)
-        else:
-            path = '.'
+            path_elements.push(self.hosted_graphite_api_key)
+
+        path_elements.push(hname)
 
         if self.graphite_data_source:
-            path = path.join((hname, self.graphite_data_source))
-        else:
-            path = path.join(hname)
+            path_elements.push(self.graphite_data_source)
+        path = '.'.join(path_elements)
 
         if self.use_pickle:
             # Buffer the performance data lines
