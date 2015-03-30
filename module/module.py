@@ -80,7 +80,6 @@ class Graphite_broker(BaseModule):
         self.multival = re.compile(r'_(\d+)$')
         self.chunk_size = 200
         self.max_chunk_size = 100000
-        self.hosted_graphite_api_key = getattr(modconf, 'hosted_graphite_api_key', '')
 
         # optional "sub-folder" in graphite to hold the data of a specific host
         self.graphite_data_source = \
@@ -199,17 +198,10 @@ class Graphite_broker(BaseModule):
         #except UnicodeEncodeError:
         #    pass
 
-        path_elements = []
-        if self.hosted_graphite_api_key:
-            path_elements.append(self.hosted_graphite_api_key)
-
         if self.graphite_data_source:
-            path_elements.append(self.graphite_data_source)
-
-        path_elements.append(hname)
-
-        path = '.'.join(path_elements)
-
+            path = '.'.join((hname, self.graphite_data_source, desc))
+        else:
+            path = '.'.join((hname, desc))
 
         if self.use_pickle:
             # Buffer the performance data lines
@@ -265,19 +257,10 @@ class Graphite_broker(BaseModule):
         #except UnicodeEncodeError:
         #    pass
 
-        # If present prepend API key to value as per http://www.hostedgraphite.com
-        path_elements = []
-
-        if self.hosted_graphite_api_key:
-            path_elements.append(self.hosted_graphite_api_key)
-
         if self.graphite_data_source:
-            path_elements.append(self.graphite_data_source)
-
-        path_elements.append(hname)
-
-        path = '.'.join(path_elements)
-
+            path = '.'.join((hname, self.graphite_data_source))
+        else:
+            path = hname
 
         if self.use_pickle:
             # Buffer the performance data lines
