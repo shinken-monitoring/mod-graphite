@@ -28,12 +28,10 @@ to brok information of the service/host perfdatas into the Graphite
 backend. http://graphite.wikidot.com/start
 """
 
-# TODO : Also buffering raw data, not only cPickle
-# TODO : Better buffering like FIFO Buffer
-
 import re
+from re import compile
+
 from socket import socket
-import cPickle
 import struct
 
 from shinken.basemodule import BaseModule
@@ -43,13 +41,13 @@ from shinken.misc.perfdata import PerfDatas
 properties = {
     'daemons': ['broker'],
     'type': 'graphite_perfdata',
-    'external': False,
+    'external': True,
 }
 
 
 # Called by the plugin manager to get a broker
 def get_instance(mod_conf):
-    logger.info("[Graphite broker] Get a graphite data module for plugin %s" % mod_conf.get_name())
+    logger.info("[Graphite] Get a graphite data module for plugin %s" % mod_conf.get_name())
     instance = Graphite_broker(mod_conf)
     return instance
 
@@ -59,271 +57,267 @@ def get_instance(mod_conf):
 class Graphite_broker(BaseModule):
     def __init__(self, modconf):
         BaseModule.__init__(self, modconf)
+        
+        self.hosts_cache = {}
+        self.services_cache = {}
+        self.host_dict = {}
+        self.svc_dict = {}
+        
+        self.con = None
+        
+        # Separate perfdata multiple values
+        self.multival = re.compile(r'_(\d+)$')
+        
+        # Specific filter to allow metrics to include '.' for Graphite
+        self.illegal_char_metric = re.compile(r'[^a-zA-Z0-9_.\-]')
+        
         self.host = getattr(modconf, 'host', 'localhost')
-        self.use_pickle = getattr(modconf, 'use_pickle', '0') == '1'
-        if self.use_pickle:
-            self.port = int(getattr(modconf, 'port', '2004'))
-        else:
-            self.port = int(getattr(modconf, 'port', '2003'))
-        self.tick_limit = int(getattr(modconf, 'tick_limit', '300'))
+        self.port = int(getattr(modconf, 'port', '2003'))
+        logger.info("[Graphite] Configuration - host/port: %s:%d", self.host, self.port)
+        
         # Used to reset check time into the scheduled time. 
         # Carbon/graphite does not like latency data and creates blanks in graphs
         # Every data with "small" latency will be considered create at scheduled time
-        self.ignore_latency_limit = \
-            int(getattr(modconf, 'ignore_latency_limit', '0'))
+        self.ignore_latency_limit = int(getattr(modconf, 'ignore_latency_limit', '0'))
         if self.ignore_latency_limit < 0:
             self.ignore_latency_limit = 0
-        self.buffer = []
-        self.ticks = 0
-        self.host_dict = {}
-        self.svc_dict = {}
-        self.multival = re.compile(r'_(\d+)$')
-        self.chunk_size = 200
-        self.max_chunk_size = 100000
+        
+        # service name to use for host check
+        self.hostcheck = getattr(modconf, 'hostcheck', None)
 
         # optional "sub-folder" in graphite to hold the data of a specific host
-        self.graphite_data_source = \
-            self.illegal_char.sub('_', getattr(modconf, 'graphite_data_source', ''))
+        self.graphite_data_source = self.illegal_char_metric.sub('_', getattr(modconf, 'graphite_data_source', ''))
+        logger.info("[Graphite] Configuration - Graphite data source: %s", self.graphite_data_source)
 
+        # optional perfdatas to be filtered
+        self.filtered_metrics = {}
+        for filter in getattr(modconf, 'filter', '[]'):
+            filtered_service, filtered_metric = filter.split(':')
+            if filtered_service not in self.filtered_metrics:
+                self.filtered_metrics[filtered_service] = []
+            self.filtered_metrics[filtered_service].append(filtered_metric.split(','))
+        
+        for service in self.filtered_metrics:
+            logger.info("[Graphite] Configuration - Filtered metric: %s - %s", service, self.filtered_metrics[service])
+
+        # Send warning, critical, min, max
+        self.send_warning = bool(getattr(modconf, 'send_warning', False))
+        logger.info("[Graphite] Configuration - send warning metrics: %d", self.send_warning)
+        self.send_critical = bool(getattr(modconf, 'send_critical', False))
+        logger.info("[Graphite] Configuration - send critical metrics: %d", self.send_critical)
+        self.send_min = bool(getattr(modconf, 'send_min', False))
+        logger.info("[Graphite] Configuration - send min metrics: %d", self.send_min)
+        self.send_max = bool(getattr(modconf, 'send_max', False))
+        logger.info("[Graphite] Configuration - send max metrics: %d", self.send_max)
 
     # Called by Broker so we can do init stuff
-    # TODO: add conf param to get pass with init
-    # Conf from arbiter!
     def init(self):
-        logger.info("[Graphite broker] I init the %s server connection to %s:%d" %
-                    (self.get_name(), str(self.host), self.port))
+        logger.info("[Graphite] initializing connection to %s:%d ...", str(self.host), self.port)
         try:
             self.con = socket()
             self.con.connect((self.host, self.port))
         except IOError, err:
-                logger.error("[Graphite broker] Graphite Carbon instance network socket!"
-                             " IOError:%s" % str(err))
-                raise
-        logger.info("[Graphite broker] Connection successful to  %s:%d"
-                    % (str(self.host), self.port))
+            logger.error("[Graphite] Graphite Carbon instance connexion failed"
+                         " IOError: %s", str(err))
+            # do not raise an exception - logging is enough ...
+        else:
+            logger.info("[Graphite] Connection successful to %s:%d", str(self.host), self.port)
 
     # Sending data to Carbon. In case of failure, try to reconnect and send again.
-    # If carbon instance is down, data are buffered.
-    def send_packet(self, p):
+    def send_packet(self, packet):
         try:
-            self.con.sendall(p)
-        except IOError:
-            logger.error("[Graphite broker] Failed sending data to the Graphite Carbon instance !"
+            self.con.sendall(packet)
+        except AttributeError:
+            logger.error("[Graphite] Connexion to the Graphite Carbon instance is not available!"
                          " Trying to reconnect ... ")
             try:
                 self.init()
-                self.con.sendall(p)
-            except IOError:
-                raise
+                self.con.sendall(packet)
+            except:
+                logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
+        except IOError:
+            logger.error("[Graphite] Failed sending data to the Graphite Carbon instance !"
+                         " Trying to reconnect ... ")
+            try:
+                self.init()
+                self.con.sendall(packet)
+            except:
+                logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
+        else:
+            logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
 
     # For a perf_data like /=30MB;4899;4568;1234;0  /var=50MB;4899;4568;1234;0 /toto=
     # return ('/', '30'), ('/var', '50')
-    def get_metric_and_value(self, perf_data):
-        res = []
+    def get_metric_and_value(self, service, perf_data):
+        result = []
         metrics = PerfDatas(perf_data)
 
         for e in metrics:
-            #try:
-            #    logger.debug("[Graphite broker] Groking: %s" % str(e))
-            #except UnicodeEncodeError:
-            #    pass
-
-            name = self.illegal_char.sub('_', e.name)
+            if service in self.filtered_metrics:
+                if e.name in self.filtered_metrics[service]:
+                    logger.warning("[Graphite] Ignore metric '%s' for filtered service: %s", e.name, service)
+                    continue
+                
+            name = self.illegal_char_metric.sub('_', e.name)
             name = self.multival.sub(r'.\1', name)
 
             # get metric value and its thresholds values if they exist
             name_value = {name: e.value}
-            if e.warning and e.critical:
-                name_value[name + '_warn'] = e.warning
-                name_value[name + '_crit'] = e.critical
-            # bailout if need
+            # bailout if no value
             if name_value[name] == '':
                 continue
-
-            #try:
-            #    logger.debug("[Graphite broker] End of grok: %s, %s" % (name, str(e.value)))
-            #except UnicodeEncodeError:
-            #    pass
+                
+            # Get or ignore extra values depending upon module configuration
+            if e.warning and self.send_warning:
+                name_value[name + '_warn'] = e.warning
+                
+            if e.critical and self.send_critical:
+                name_value[name + '_crit'] = e.critical
+                
+            if e.min and self.send_min:
+                name_value[name + '_min'] = e.min
+                
+            if e.max and self.send_max:
+                name_value[name + '_max'] = e.max
+                
             for key, value in name_value.items():
-                res.append((key, value))
-        return res
+                result.append((key, value))
+
+        return result
 
 
-    # Prepare service custom vars
+    # Prepare service cache
     def manage_initial_service_status_brok(self, b):
+        host_name = b.data['host_name']
+        service_description = b.data['service_description']
+        service_id = host_name+"/"+service_description
+        logger.debug("[Graphite] initial service status: %s", service_id)
+        
+        if not host_name in self.hosts_cache:
+            logger.error("[Graphite] initial service status, host is unknown: %s.", host_name)
+            return
+
+        self.services_cache[service_id] = {}
         if '_GRAPHITE_POST' in b.data['customs']:
-            self.svc_dict[(b.data['host_name'], b.data['service_description'])] = b.data['customs']
+            self.services_cache[service_id]['_GRAPHITE_POST'] = b.data['customs']['_GRAPHITE_POST']
+            
+        logger.debug("[Graphite] initial service status received: %s", service_id)
 
 
-    # Prepare host custom vars
+    # Prepare host cache
     def manage_initial_host_status_brok(self, b):
+        host_name = b.data['host_name']
+        logger.debug("[Graphite] initial host status: %s", host_name)
+
+        self.hosts_cache[host_name] = {}
         if '_GRAPHITE_PRE' in b.data['customs']:
-            self.host_dict[b.data['host_name']] = b.data['customs']
+            self.hosts_cache[host_name]['_GRAPHITE_PRE'] = b.data['customs']['_GRAPHITE_PRE']
+            
+        logger.debug("[Graphite] initial host status received: %s", host_name)
 
 
-    # A service check result brok has just arrived, we UPDATE data info with this
+    # A service check result brok has just arrived ...
     def manage_service_check_result_brok(self, b):
-        data = b.data
-
-        perf_data = data['perf_data']
-        couples = self.get_metric_and_value(perf_data)
+        host_name = b.data['host_name']
+        service_description = b.data['service_description']
+        service_id = host_name+"/"+service_description
+        logger.debug("[Graphite] service check result: %s", service_id)
+        
+        # If host/service initial status brok has not been received, ignore ...
+        if host_name not in self.hosts_cache:
+            logger.warning("[Graphite] received service check result for an unknown host: %s", host_name)
+            return
+        if service_id not in self.services_cache:
+            logger.warning("[Graphite] received service check result for an unknown service: %s", service_id)
+            return
+                
+        # Decode received metrics
+        couples = self.get_metric_and_value(service_description, b.data['perf_data'])
 
         # If no values, we can exit now
         if len(couples) == 0:
             return
 
-        hname = self.illegal_char.sub('_', data['host_name'])
-        if data['host_name'] in self.host_dict:
-            customs_datas = self.host_dict[data['host_name']]
-            if '_GRAPHITE_PRE' in customs_datas:
-                hname = ".".join((customs_datas['_GRAPHITE_PRE'], hname))
+        hname = self.illegal_char.sub('_', host_name)
+        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
-        desc = self.illegal_char.sub('_', data['service_description'])
-        if (data['host_name'], data['service_description']) in self.svc_dict:
-            customs_datas = self.svc_dict[(data['host_name'], data['service_description'])]
-            if '_GRAPHITE_POST' in customs_datas:
-                desc = ".".join((desc, customs_datas['_GRAPHITE_POST']))
+        desc = self.illegal_char.sub('_', service_description)
+        if '_GRAPHITE_POST' in self.services_cache[service_id]:
+            desc = ".".join((desc, self.services_cache[service_id]['_GRAPHITE_POST']))
 
-        if self.ignore_latency_limit >= data['latency'] > 0:
-            check_time = int(data['last_chk']) - int(data['latency'])
-            logger.info("[Graphite broker] Ignoring latency for service %s. Latency : %s",
-                data['service_description'], data['latency'])
+        if self.ignore_latency_limit >= b.data['latency'] > 0:
+            check_time = int(b.data['last_chk']) - int(b.data['latency'])
+            logger.info("[Graphite] Ignoring latency for service %s. Latency : %s",
+                b.data['service_description'], b.data['latency'])
         else:
-            check_time = int(data['last_chk']) 
+            check_time = int(b.data['last_chk']) 
 
-
-        #try:
-        #    logger.debug("[Graphite broker] Hostname: %s, Desc: %s, check time: %d, perfdata: %s"
-        #                 % (hname, desc, check_time, str(perf_data)))
-        #except UnicodeEncodeError:
-        #    pass
 
         if self.graphite_data_source:
             path = '.'.join((hname, self.graphite_data_source, desc))
         else:
             path = '.'.join((hname, desc))
 
-        if self.use_pickle:
-            # Buffer the performance data lines
-            for (metric, value) in couples:
-                self.buffer.append(("%s.%s" % (path, metric),
-                                   ("%d" % check_time, "%s" % str(value))))
+        lines = []
+        # Send a bulk of all metrics at once
+        for (metric, value) in couples:
+            lines.append("%s.%s %s %d" % (path, metric, str(value), check_time))
+        packet = '\n'.join(lines)
 
-        else:
-            lines = []
-            # Send a bulk of all metrics at once
-            for (metric, value) in couples:
-                lines.append("%s.%s %s %d" % (path, metric, str(value), check_time))
-            packet = '\n'.join(lines) + '\n'  # Be sure we put \n every where
-            #try:
-            #    logger.debug("[Graphite broker] Launching: %s" % packet)
-            #except UnicodeEncodeError:
-            #    pass
-            try:
-                self.send_packet(packet)
-            except IOError:
-                logger.error("[Graphite broker] Failed sending to the Graphite Carbon."
-                             " Data are lost")
+        self.send_packet(packet)
 
 
     # A host check result brok has just arrived, we UPDATE data info with this
     def manage_host_check_result_brok(self, b):
-        data = b.data
+        host_name = b.data['host_name']
+        logger.debug("[Graphite] host check result: %s", host_name)
 
-        perf_data = data['perf_data']
-        couples = self.get_metric_and_value(perf_data)
+        # If host initial status brok has not been received, ignore ...
+        if host_name not in self.hosts_cache:
+            logger.warning("[Graphite] received service check result for an unknown host: %s", host_name)
+            return
+        
+        # Decode received metrics
+        couples = self.get_metric_and_value('host_check', b.data['perf_data'])
 
         # If no values, we can exit now
         if len(couples) == 0:
             return
 
-        hname = self.illegal_char.sub('_', data['host_name'])
-        if data['host_name'] in self.host_dict:
-            customs_datas = self.host_dict[data['host_name']]
-            if '_GRAPHITE_PRE' in customs_datas:
-                hname = ".".join((customs_datas['_GRAPHITE_PRE'], hname))
-        
-        if self.ignore_latency_limit >= data['latency'] > 0:
-            check_time = int(data['last_chk']) - int(data['latency'])
-            logger.info("[Graphite broker] Ignoring latency for host %s. Latency : %s",
-                data['host_name'], data['latency'])
+        hname = self.illegal_char.sub('_', host_name)
+        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
+
+        if self.ignore_latency_limit >= b.data['latency'] > 0:
+            check_time = int(b.data['last_chk']) - int(b.data['latency'])
+            logger.info("[Graphite] Ignoring latency for service %s. Latency : %s",
+                b.data['service_description'], b.data['latency'])
         else:
-            check_time = int(data['last_chk'])
-
-
-        #try:
-        #    logger.debug("[Graphite broker] Hostname %s, check time: %d, perfdata: %s"
-        #                 % (hname, check_time, str(perf_data)))
-        #except UnicodeEncodeError:
-        #    pass
+            check_time = int(b.data['last_chk']) 
 
         if self.graphite_data_source:
             path = '.'.join((hname, self.graphite_data_source))
         else:
             path = hname
 
-        if self.use_pickle:
-            # Buffer the performance data lines
-            for (metric, value) in couples:
-                self.buffer.append(("%s.__HOST__.%s" % (path, metric),
-                                   ("%d" % check_time,"%s" % value)))
-        else:
-            lines = []
-            # Send a bulk of all metrics at once
-            for (metric, value) in couples:
-                lines.append("%s.__HOST__.%s %s %d" % (path, metric, value, check_time))
-            packet = '\n'.join(lines) + '\n'  # Be sure we put \n every where
-            #try:
-            #    logger.debug("[Graphite broker] Launching: %s" % packet)
-            #except UnicodeEncodeError:
-            #    pass
-            try:
-                self.send_packet(packet)
-            except IOError:
-                logger.error("[Graphite broker] Failed sending to the Graphite Carbon."
-                             " Data are lost")
+        lines = []
+        # Send a bulk of all metrics at once
+        for (metric, value) in couples:
+            if self.hostcheck:
+                lines.append("%s.%s.%s %s %d" % (path, self.hostcheck, metric, value, check_time))
+            else:
+                lines.append("%s.%s %s %d" % (path, metric, value, check_time))
+        packet = '\n'.join(lines)
+
+        self.send_packet(packet)
 
 
-    def hook_tick(self, brok):
-        """Each second the broker calls the hook_tick function
-           Every tick try to flush the buffer
-        """
-        if self.use_pickle:
-            if self.ticks >= self.tick_limit:
-                # If the number of ticks where data was not
-                # sent successfully to Graphite reaches the bufferlimit.
-                # Reset the buffer and reset the ticks
-                logger.error("[Graphite broker] Buffering time exceeded. Freeing buffer")
-                self.buffer = []
-                self.ticks = 0
-                return
-
-            while len(self.buffer) > 0:
-                try:
-                    self.chunk_size = int(self.chunk_size)
-                    buf2 = self.buffer[:self.chunk_size]
-                    self.con.sendall(self.create_pack(buf2))
-                    self.buffer = self.buffer[self.chunk_size:]
-                    self.chunk_size = min(self.max_chunk_size, self.chunk_size * 1.5)
-                except IOError:
-                    self.max_chunk_size = self.chunk_size
-                    self.chunk_size /= 1.5
-                    self.con.close()
-
-                    try:
-                        self.init()
-                    except IOError:
-                        logger.error("[Graphite broker] Sending data Failed. Buffering state : %s / %s"
-                                     % (self.ticks, self.tick_limit))
-                        self.ticks += 1
-                        return
-
-            self.ticks = 0
-
-
-
-    def create_pack(self, buff):
-        payload = cPickle.dumps(buff)
-        header = struct.pack("!L", len(payload))
-        packet = header + payload
-        return packet
+    def main(self):
+        self.set_proctitle(self.name)
+        self.set_exit_handler()
+        while not self.interrupted:
+            l = self.to_q.get()
+            for b in l:
+                b.prepare()
+                self.manage_brok(b)
