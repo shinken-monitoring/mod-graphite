@@ -264,6 +264,7 @@ class Graphite_broker(BaseModule):
         # Send a bulk of all metrics at once
         for (metric, value) in couples:
             lines.append("%s.%s %s %d" % (path, metric, str(value), check_time))
+        lines.append("\n")
         packet = '\n'.join(lines)
 
         self.send_packet(packet)
