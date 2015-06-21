@@ -93,10 +93,14 @@ class Graphite_broker(BaseModule):
         self.filtered_metrics = {}
         filters = getattr(modconf, 'filter', [])
         for filter in filters:
-            filtered_service, filtered_metric = filter.split(':')
-            if filtered_service not in self.filtered_metrics:
-                self.filtered_metrics[filtered_service] = []
-            self.filtered_metrics[filtered_service].append(filtered_metric.split(','))
+            try:
+                filtered_service, filtered_metric = filter.split(':')
+                if filtered_service not in self.filtered_metrics:
+                    self.filtered_metrics[filtered_service] = []
+                self.filtered_metrics[filtered_service].append(filtered_metric.split(','))
+            except:
+                logger.warning("[Graphite] Configuration - ignoring badly declared filtered metric: %s", filter)
+                pass
         
         for service in self.filtered_metrics:
             logger.info("[Graphite] Configuration - Filtered metric: %s - %s", service, self.filtered_metrics[service])
