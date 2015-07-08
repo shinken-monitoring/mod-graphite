@@ -314,6 +314,7 @@ class Graphite_broker(BaseModule):
                 lines.append("%s.%s.%s %s %d" % (path, self.hostcheck, metric, value, check_time))
             else:
                 lines.append("%s.%s %s %d" % (path, metric, value, check_time))
+        lines.append("\n")
         packet = '\n'.join(lines)
 
         self.send_packet(packet)
