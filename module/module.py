@@ -217,6 +217,8 @@ class Graphite_broker(BaseModule):
         self.hosts_cache[host_name] = {}
         if '_GRAPHITE_PRE' in b.data['customs']:
             self.hosts_cache[host_name]['_GRAPHITE_PRE'] = b.data['customs']['_GRAPHITE_PRE']
+        if '_GRAPHITE_GROUP' in b.data['customs']:
+            self.hosts_cache[host_name]['_GRAPHITE_GROUP'] = b.data['customs']['_GRAPHITE_GROUP']
 
         logger.debug("[Graphite] initial host status received: %s", host_name)
 
@@ -246,6 +248,9 @@ class Graphite_broker(BaseModule):
         hname = self.illegal_char.sub('_', host_name)
         if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
+
+        if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
 
         desc = self.illegal_char.sub('_', service_description)
         if '_GRAPHITE_POST' in self.services_cache[service_id]:
@@ -294,6 +299,9 @@ class Graphite_broker(BaseModule):
         hname = self.illegal_char.sub('_', host_name)
         if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
+
+        if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
 
         if self.ignore_latency_limit >= b.data['latency'] > 0:
             check_time = int(b.data['last_chk']) - int(b.data['latency'])
