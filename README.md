@@ -4,6 +4,18 @@ mod-graphite2
 
 Shinken module for exporting data to a Graphite server, version 2
 
+This version is a refactoring of the previous graphite module which allows:
+
+   - run as an external broker module
+   - do not manage metrics until initial hosts/services status are received (avoid to miss prefixes)
+   - remove pickle communication with Carbon (not very safe ...)
+   - maintain a cache for the packets not sent because of connection problems
+   - improve configuration features:
+      - filter metrics warning and critical thresholds
+      - filter metrics min and max values
+      - filter service/metrics (avoid sending all metrics to Carbon)
+      - manage host _GRAPHITE_PRE and service _GRAPHITE_POST to build metric id
+      - manage host _GRAPHITE_GROUP as an extra hierarchy level for metrics (easier usage in metrics dashboard)
 
 Install
 --------------------------------

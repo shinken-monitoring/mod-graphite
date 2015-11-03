@@ -11,6 +11,7 @@ This version is a refactoring of the previous graphite module which allows:
    - run as an external broker module
    - do not manage metrics until initial hosts/services status are received (avoid to miss prefixes)
    - remove pickle communication with Carbon (not very safe ...)
+   - maintain a cache for the packets not sent because of connection problems
    - improve configuration features:
       - filter metrics warning and critical thresholds
       - filter metrics min and max values
@@ -59,6 +60,15 @@ Default configuration file is as is :
       # default to localhost:2003
       #host            localhost
       #port            2003
+
+      # Cache management.
+      # Maximum cache size - number of packets stored in a queue
+      # When maximum length is reached, oldest packets are removed ...
+      #cache_max_length     1000
+
+      # Commit volume
+      # Miximm numer of cached packets sent each time a received packet is sent when connection is restore
+      #cache_commit_volume     100
 
       # Optionally specify a source identifier for the metric data sent to
       # Graphite. This can help differentiate data from multiple sources for the
