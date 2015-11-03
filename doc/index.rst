@@ -19,18 +19,17 @@ This version is a refactoring of the previous graphite module which allows:
       - manage host _GRAPHITE_GROUP as an extra hierarchy level for metrics (easier usage in metrics dashboard)
 
 Requirements
-=============
+-------------------------
 
 None.
 
 
 Enabling module
-=============================
+-------------------------
 
-To use the `graphite` module you must declare it in your main broker configuration.
+To use the `graphite2` module you must declare it in your main broker configuration.
 
 ::
-
 
    define broker {
       ...
@@ -39,6 +38,9 @@ To use the `graphite` module you must declare it in your main broker configurati
 
    }
 
+
+Configuring module
+-------------------------
 
 The module configuration is defined in the file: ``graphite2.cfg``.
 
@@ -50,7 +52,7 @@ Default configuration file is as is :
    # Graphite is a time series database with a rich web service interface, viewed
    # as a modern alternative to RRDtool.
    define module {
-      module_name     graphite
+      module_name     graphite2
       module_type     graphite_perfdata
 
       # Graphite server / port to use
