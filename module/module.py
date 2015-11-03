@@ -133,23 +133,23 @@ class Graphite_broker(BaseModule):
         try:
             self.con.sendall(packet)
         except AttributeError:
-            logger.error("[Graphite] Connexion to the Graphite Carbon instance is not available!"
-                         " Trying to reconnect ... ")
+            logger.warning("[Graphite] Connexion to the Graphite Carbon instance is not available!"
+                           " Trying to reconnect ... ")
             try:
                 self.init()
                 self.con.sendall(packet)
+                logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
             except:
                 logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
         except IOError:
-            logger.error("[Graphite] Failed sending data to the Graphite Carbon instance !"
-                         " Trying to reconnect ... ")
+            logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
+                           " Trying to reconnect ... ")
             try:
                 self.init()
                 self.con.sendall(packet)
+                logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
             except:
                 logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
-        else:
-            logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
 
     # For a perf_data like /=30MB;4899;4568;1234;0  /var=50MB;4899;4568;1234;0 /toto=
     # return ('/', '30'), ('/var', '50')
