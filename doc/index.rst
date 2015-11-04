@@ -51,7 +51,7 @@ Default configuration file is as is :
    ## Loaded by:   Broker
    # Export host and service performance data to Graphite carbon process.
    # Graphite is a time series database with a rich web service interface, viewed
-   # as a modern alternative to RRDtool.
+   # as a modern alternative to RRDtool.  http://graphite.wikidot.com/start
    define module {
       module_name     graphite2
       module_type     graphite_perfdata
@@ -67,20 +67,19 @@ Default configuration file is as is :
       #cache_max_length     1000
 
       # Commit volume
-      # Miximm numer of cached packets sent each time a received packet is sent when connection is restore
+      # Maximum number of cached packets sent each time a received packet is sent when connection is restored
       #cache_commit_volume     100
 
-      # Optionally specify a source identifier for the metric data sent to
-      # Graphite. This can help differentiate data from multiple sources for the
-      # same hosts.
+      # Optionally specify a source identifier for the metric data sent to Graphite.
+      # This can help differentiate data from multiple sources for the same hosts.
       #
       # Result is:
       # host.GRAPHITE_DATA_SOURCE.service.metric
       # instead of:
       # host.service.metric
       #
-      # Note: You must set the same value in this module and in the
-      # Graphite UI module configuration.
+      # Note: You must set the same value in this module and in the Graphite UI module configuration.
+      #
       # default: the variable is unset
       #graphite_data_source shinken
 
@@ -90,6 +89,7 @@ Default configuration file is as is :
       # the timestamp associated to the data will be 0
       # Basically this ignore small latency in order to have regular interval between data.
       # We skip an Graphite limitation that expect a specific timestamp range for data.
+      # default is to ignore latency
       #ignore_latency_limit 15
 
       # Optionnaly specify a service description for host check metrics
