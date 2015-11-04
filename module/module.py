@@ -164,7 +164,7 @@ class Graphite_broker(BaseModule):
 
         try:
             self.con.sendall(packet)
-            logger.info("[Graphite] Data sent to Carbon: \n%s", packet)
+            logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
         except IOError:
             logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
                            " Storing data in module cache ... ")
