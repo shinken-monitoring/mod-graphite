@@ -11,25 +11,29 @@ This version is a refactoring of the previous graphite module which allows:
    - remove pickle communication with Carbon (not very safe ...)
    - maintain a cache for the packets not sent because of connection problems
    - improve configuration features:
+      - configure cache size
       - filter metrics warning and critical thresholds
       - filter metrics min and max values
       - filter service/metrics (avoid sending all metrics to Carbon)
       - manage host _GRAPHITE_PRE and service _GRAPHITE_POST to build metric id
       - manage host _GRAPHITE_GROUP as an extra hierarchy level for metrics (easier usage in metrics dashboard)
 
-Install
+This new module improves some features but disabled some others:
+
+   - this module is an external broker module. 
+   As of it the pickle interface between the module and Carbon is no more implemented
+
+Installation
 --------------------------------
 
-```
    su - shinken
    
    shinken install graphite2
-```
 
-Configure
+Configuration
 --------------------------------
 
-```
+
    vi /etc/shinken/brokers/broker-master.cfg
    
    => modules graphite2
@@ -37,15 +41,14 @@ Configure
    vi /etc/shinken/modules/graphite2.cfg
    
    => host graphite
-```
+
 
 Run
 --------------------------------
 
-```
    su -
    /etc/init.d/shinken restart
-```
+
 
 Hosts specific configuration
 --------------------------------
