@@ -63,11 +63,11 @@ class Graphite_broker(BaseModule):
 
         # Connection and cache management
         self.con = None
-        self.cache = deque()
         self.cache_max_length = int(getattr(modconf, 'cache_max_length', '1000'))
         logger.info('[Graphite] maximum cache size: %d packets', self.cache_max_length)
         self.cache_commit_volume = int(getattr(modconf, 'cache_commit_volume', '100'))
         logger.info('[Graphite] maximum cache commit volume: %d packets', self.cache_commit_volume)
+        self.cache = deque(maxlen=self.cache_max_length)
 
         # Separate perfdata multiple values
         self.multival = compile(r'_(\d+)$')
@@ -130,48 +130,28 @@ class Graphite_broker(BaseModule):
                          " IOError: %s", str(e))
             # do not raise an exception - logging is enough ...
             self.con = None
-            return
+
+        return self.con
 
     # Sending data to Carbon. In case of failure, try to reconnect and send again.
     def send_packet(self, packet):
-        try:
-            self.con.sendall(packet)
-            logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
-        except AttributeError:
-            logger.warning("[Graphite] Connexion to the Graphite Carbon instance is not available!"
-                           " Trying to reconnect ... ")
-            try:
-                self.init()
-                self.con.sendall(packet)
-                logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
-            except:
-                logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
-                self.con = None
-                self.cache.append(packet)
-                logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
-                return False
-        except IOError:
-            logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
-                           " Trying to reconnect ... ")
-            try:
-                self.init()
-                self.con.sendall(packet)
-                logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
-            except:
-                logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
-                self.con = None
-                self.cache.append(packet)
-                logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
-                return False
+        if not self.con:
+            self.init()
 
+        if not self.con:
+            logger.warning("[Graphite] Connection to the Graphite Carbon instance is broken!"
+                           " Storing data in module cache ... ")
+            self.cache.append(packet)
+            logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
+            return False
 
         if self.cache:
-            logger.info("[Graphite] %d cached data to send to Graphite", len(self.cache))
-            commit_count = 1
+            logger.info("[Graphite] %d cached metrics packet(s) to send to Graphite", len(self.cache))
+            commit_count = 0
             now = time()
             while True:
                 try:
-                    self.con.sendall(packet)
+                    self.con.sendall(self.cache.popleft())
                     commit_count = commit_count + 1
                     if commit_count >= self.cache_commit_volume:
                         break
@@ -180,7 +160,17 @@ class Graphite_broker(BaseModule):
                     break
                 except Exception, exp:
                     logger.error("[mongo-logs] exception: %s", str(exp))
-            logger.time("[Graphite] time to flush cached %d metrics (%2.4f)", commit_count, time() - now)
+            logger.info("[Graphite] time to flush %d cached metrics packet(s) (%2.4f)", commit_count, time() - now)
+
+        try:
+            self.con.sendall(packet)
+            logger.info("[Graphite] Data sent to Carbon: \n%s", packet)
+        except IOError:
+            logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
+                           " Storing data in module cache ... ")
+            self.cache.append(packet)
+            logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
+            return False
 
         return True
 
@@ -227,7 +217,7 @@ class Graphite_broker(BaseModule):
         host_name = b.data['host_name']
         service_description = b.data['service_description']
         service_id = host_name+"/"+service_description
-        logger.debug("[Graphite] initial service status: %s", service_id)
+        logger.info("[Graphite] got initial service status: %s", service_id)
 
         if not host_name in self.hosts_cache:
             logger.error("[Graphite] initial service status, host is unknown: %s.", host_name)
@@ -242,7 +232,7 @@ class Graphite_broker(BaseModule):
     # Prepare host cache
     def manage_initial_host_status_brok(self, b):
         host_name = b.data['host_name']
-        logger.debug("[Graphite] initial host status: %s", host_name)
+        logger.info("[Graphite] got initial host status: %s", host_name)
 
         self.hosts_cache[host_name] = {}
         if '_GRAPHITE_PRE' in b.data['customs']:
@@ -259,7 +249,7 @@ class Graphite_broker(BaseModule):
         service_id = host_name+"/"+service_description
         logger.debug("[Graphite] service check result: %s", service_id)
 
-        # If host/service initial status brok has not been received, ignore ...
+        # If host and service initial status brokes have not been received, ignore ...
         if host_name not in self.hosts_cache:
             logger.warning("[Graphite] received service check result for an unknown host: %s", host_name)
             return
@@ -275,6 +265,7 @@ class Graphite_broker(BaseModule):
             logger.debug("[Graphite] no metrics to send ...")
             return
 
+        # Custom hosts variables
         hname = self.illegal_char.sub('_', host_name)
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
@@ -282,10 +273,12 @@ class Graphite_broker(BaseModule):
         if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
+        # Custom services variables
         desc = self.illegal_char.sub('_', service_description)
         if '_GRAPHITE_POST' in self.services_cache[service_id]:
             desc = ".".join((desc, self.services_cache[service_id]['_GRAPHITE_POST']))
 
+        # Checks latency
         if self.ignore_latency_limit >= b.data['latency'] > 0:
             check_time = int(b.data['last_chk']) - int(b.data['latency'])
             logger.info("[Graphite] Ignoring latency for service %s. Latency : %s",
@@ -293,7 +286,7 @@ class Graphite_broker(BaseModule):
         else:
             check_time = int(b.data['last_chk'])
 
-
+        # Graphite data source
         if self.graphite_data_source:
             path = '.'.join((hname, self.graphite_data_source, desc))
         else:
@@ -326,6 +319,7 @@ class Graphite_broker(BaseModule):
             logger.debug("[Graphite] no metrics to send ...")
             return
 
+        # Custom hosts variables
         hname = self.illegal_char.sub('_', host_name)
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
@@ -333,6 +327,7 @@ class Graphite_broker(BaseModule):
         if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
+        # Checks latency
         if self.ignore_latency_limit >= b.data['latency'] > 0:
             check_time = int(b.data['last_chk']) - int(b.data['latency'])
             logger.info("[Graphite] Ignoring latency for service %s. Latency : %s",
@@ -340,6 +335,7 @@ class Graphite_broker(BaseModule):
         else:
             check_time = int(b.data['last_chk'])
 
+        # Graphite data source
         if self.graphite_data_source:
             path = '.'.join((hname, self.graphite_data_source))
         else:
