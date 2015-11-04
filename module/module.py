@@ -1,5 +1,4 @@
 #!/usr/bin/python
-
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 2009-2012:
@@ -7,6 +6,7 @@
 #    Gerhard Lausser, Gerhard.Lausser@consol.de
 #    Gregory Starck, g.starck@gmail.com
 #    Hartmut Goebel, h.goebel@goebel-consult.de
+#    Frederic Mohier, frederic.mohier@gmail.com
 #
 # This file is part of Shinken.
 #
@@ -28,11 +28,11 @@ to brok information of the service/host perfdatas into the Graphite
 backend. http://graphite.wikidot.com/start
 """
 
-import re
 from re import compile
+from time import time
 
 from socket import socket
-import struct
+from collections import deque
 
 from shinken.basemodule import BaseModule
 from shinken.log import logger
@@ -60,16 +60,20 @@ class Graphite_broker(BaseModule):
 
         self.hosts_cache = {}
         self.services_cache = {}
-        self.host_dict = {}
-        self.svc_dict = {}
 
+        # Connection and cache management
         self.con = None
+        self.cache = deque()
+        self.cache_max_length = int(getattr(modconf, 'cache_max_length', '1000'))
+        logger.info('[Graphite] maximum cache size: %d packets', self.cache_max_length)
+        self.cache_commit_volume = int(getattr(modconf, 'cache_commit_volume', '100'))
+        logger.info('[Graphite] maximum cache commit volume: %d packets', self.cache_commit_volume)
 
         # Separate perfdata multiple values
-        self.multival = re.compile(r'_(\d+)$')
+        self.multival = compile(r'_(\d+)$')
 
         # Specific filter to allow metrics to include '.' for Graphite
-        self.illegal_char_metric = re.compile(r'[^a-zA-Z0-9_.\-]')
+        self.illegal_char_metric = compile(r'[^a-zA-Z0-9_.\-]')
 
         self.host = getattr(modconf, 'host', 'localhost')
         self.port = int(getattr(modconf, 'port', '2003'))
@@ -121,17 +125,18 @@ class Graphite_broker(BaseModule):
         try:
             self.con = socket()
             self.con.connect((self.host, self.port))
-        except IOError, err:
+        except IOError as e:
             logger.error("[Graphite] Graphite Carbon instance connexion failed"
-                         " IOError: %s", str(err))
+                         " IOError: %s", str(e))
             # do not raise an exception - logging is enough ...
-        else:
-            logger.info("[Graphite] Connection successful to %s:%d", str(self.host), self.port)
+            self.con = None
+            return
 
     # Sending data to Carbon. In case of failure, try to reconnect and send again.
     def send_packet(self, packet):
         try:
             self.con.sendall(packet)
+            logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
         except AttributeError:
             logger.warning("[Graphite] Connexion to the Graphite Carbon instance is not available!"
                            " Trying to reconnect ... ")
@@ -141,6 +146,10 @@ class Graphite_broker(BaseModule):
                 logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
             except:
                 logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
+                self.con = None
+                self.cache.append(packet)
+                logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
+                return False
         except IOError:
             logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
                            " Trying to reconnect ... ")
@@ -150,14 +159,37 @@ class Graphite_broker(BaseModule):
                 logger.debug("[Graphite] Data sent to Carbon: \n%s", packet)
             except:
                 logger.error("[Graphite] Failed sending, data are lost: \n%s", packet)
+                self.con = None
+                self.cache.append(packet)
+                logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
+                return False
 
-    # For a perf_data like /=30MB;4899;4568;1234;0  /var=50MB;4899;4568;1234;0 /toto=
-    # return ('/', '30'), ('/var', '50')
+
+        if self.cache:
+            logger.info("[Graphite] %d cached data to send to Graphite", len(self.cache))
+            commit_count = 1
+            now = time()
+            while True:
+                try:
+                    self.con.sendall(packet)
+                    commit_count = commit_count + 1
+                    if commit_count >= self.cache_commit_volume:
+                        break
+                except IndexError:
+                    logger.debug("[Graphite] sent all cached metrics")
+                    break
+                except Exception, exp:
+                    logger.error("[mongo-logs] exception: %s", str(exp))
+            logger.time("[Graphite] time to flush cached %d metrics (%2.4f)", commit_count, time() - now)
+
+        return True
+
     def get_metric_and_value(self, service, perf_data):
         result = []
         metrics = PerfDatas(perf_data)
 
         for e in metrics:
+            logger.debug("[Graphite] metric: %s", e.name)
             if service in self.filtered_metrics:
                 if e.name in self.filtered_metrics[service]:
                     logger.warning("[Graphite] Ignore metric '%s' for filtered service: %s", e.name, service)
@@ -190,7 +222,6 @@ class Graphite_broker(BaseModule):
 
         return result
 
-
     # Prepare service cache
     def manage_initial_service_status_brok(self, b):
         host_name = b.data['host_name']
@@ -208,7 +239,6 @@ class Graphite_broker(BaseModule):
 
         logger.debug("[Graphite] initial service status received: %s", service_id)
 
-
     # Prepare host cache
     def manage_initial_host_status_brok(self, b):
         host_name = b.data['host_name']
@@ -221,7 +251,6 @@ class Graphite_broker(BaseModule):
             self.hosts_cache[host_name]['_GRAPHITE_GROUP'] = b.data['customs']['_GRAPHITE_GROUP']
 
         logger.debug("[Graphite] initial host status received: %s", host_name)
-
 
     # A service check result brok has just arrived ...
     def manage_service_check_result_brok(self, b):
@@ -243,14 +272,15 @@ class Graphite_broker(BaseModule):
 
         # If no values, we can exit now
         if len(couples) == 0:
+            logger.debug("[Graphite] no metrics to send ...")
             return
 
         hname = self.illegal_char.sub('_', host_name)
-        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
-            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
-
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
+
+        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
         desc = self.illegal_char.sub('_', service_description)
         if '_GRAPHITE_POST' in self.services_cache[service_id]:
@@ -278,7 +308,6 @@ class Graphite_broker(BaseModule):
 
         self.send_packet(packet)
 
-
     # A host check result brok has just arrived, we UPDATE data info with this
     def manage_host_check_result_brok(self, b):
         host_name = b.data['host_name']
@@ -294,14 +323,15 @@ class Graphite_broker(BaseModule):
 
         # If no values, we can exit now
         if len(couples) == 0:
+            logger.debug("[Graphite] no metrics to send ...")
             return
 
         hname = self.illegal_char.sub('_', host_name)
-        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
-            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
-
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
+
+        if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
+            hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
         if self.ignore_latency_limit >= b.data['latency'] > 0:
             check_time = int(b.data['last_chk']) - int(b.data['latency'])
@@ -326,7 +356,6 @@ class Graphite_broker(BaseModule):
         packet = '\n'.join(lines)
 
         self.send_packet(packet)
-
 
     def main(self):
         self.set_proctitle(self.name)
