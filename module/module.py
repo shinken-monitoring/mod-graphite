@@ -61,14 +61,6 @@ class Graphite_broker(BaseModule):
         self.hosts_cache = {}
         self.services_cache = {}
 
-        # Connection and cache management
-        self.con = None
-        self.cache_max_length = int(getattr(modconf, 'cache_max_length', '1000'))
-        logger.info('[Graphite] maximum cache size: %d packets', self.cache_max_length)
-        self.cache_commit_volume = int(getattr(modconf, 'cache_commit_volume', '100'))
-        logger.info('[Graphite] maximum cache commit volume: %d packets', self.cache_commit_volume)
-        self.cache = deque(maxlen=self.cache_max_length)
-
         # Separate perfdata multiple values
         self.multival = compile(r'_(\d+)$')
 
@@ -78,6 +70,14 @@ class Graphite_broker(BaseModule):
         self.host = getattr(modconf, 'host', 'localhost')
         self.port = int(getattr(modconf, 'port', '2003'))
         logger.info("[Graphite] Configuration - host/port: %s:%d", self.host, self.port)
+
+        # Connection and cache management
+        self.con = None
+        self.cache_max_length = int(getattr(modconf, 'cache_max_length', '1000'))
+        logger.info('[Graphite] Configuration - maximum cache size: %d packets', self.cache_max_length)
+        self.cache_commit_volume = int(getattr(modconf, 'cache_commit_volume', '100'))
+        logger.info('[Graphite] Configuration - maximum cache commit volume: %d packets', self.cache_commit_volume)
+        self.cache = deque(maxlen=self.cache_max_length)
 
         # Used to reset check time into the scheduled time.
         # Carbon/graphite does not like latency data and creates blanks in graphs
