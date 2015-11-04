@@ -20,14 +20,14 @@ This version is a refactoring of the previous graphite module which allows:
 
 This new module improves some features but disabled some others:
 
-   - this module is an external broker module. 
+   - this module is an external broker module.
    As of it the pickle interface between the module and Carbon is no more implemented
 
 Installation
 --------------------------------
 
    su - shinken
-   
+
    shinken install graphite2
 
 Configuration
@@ -35,11 +35,11 @@ Configuration
 
 
    vi /etc/shinken/brokers/broker-master.cfg
-   
+
    => modules graphite2
 
    vi /etc/shinken/modules/graphite2.cfg
-   
+
    => host graphite
 
 
