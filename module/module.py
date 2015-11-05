@@ -99,15 +99,15 @@ class Graphite_broker(BaseModule):
         for filter in filters:
             try:
                 filtered_service, filtered_metric = filter.split(':')
-                if filtered_service not in self.filtered_metrics:
-                    self.filtered_metrics[filtered_service] = []
-                self.filtered_metrics[filtered_service].append(filtered_metric.split(','))
+                self.filtered_metrics[filtered_service] = []
+                if self.filtered_metrics[filtered_service]:
+                    self.filtered_metrics[filtered_service] = filtered_metric.split(',')
             except:
                 logger.warning("[Graphite] Configuration - ignoring badly declared filtered metric: %s", filter)
                 pass
 
         for service in self.filtered_metrics:
-            logger.info("[Graphite] Configuration - Filtered metric: %s - %s", service, self.filtered_metrics[service])
+            logger.info("[Graphite] Configuration - Filtered metrics: %s - %s", service, self.filtered_metrics[service])
 
         # Send warning, critical, min, max
         self.send_warning = bool(getattr(modconf, 'send_warning', False))
@@ -179,10 +179,10 @@ class Graphite_broker(BaseModule):
         metrics = PerfDatas(perf_data)
 
         for e in metrics:
-            logger.debug("[Graphite] metric: %s", e.name)
+            logger.debug("[Graphite] service: %s, metric: %s", e.name)
             if service in self.filtered_metrics:
                 if e.name in self.filtered_metrics[service]:
-                    logger.warning("[Graphite] Ignore metric '%s' for filtered service: %s", e.name, service)
+                    logger.debug("[Graphite] Ignore metric '%s' for filtered service: %s", e.name, service)
                     continue
 
             name = self.illegal_char_metric.sub('_', e.name)
@@ -256,6 +256,11 @@ class Graphite_broker(BaseModule):
         if service_id not in self.services_cache:
             logger.warning("[Graphite] received service check result for an unknown service: %s", service_id)
             return
+
+        if service_description in self.filtered_metrics:
+            if len(self.filtered_metrics[service_description]) == 0:
+                logger.debug("[Graphite] Ignore service '%s' metrics", service_description)
+                return
 
         # Decode received metrics
         couples = self.get_metric_and_value(service_description, b.data['perf_data'])
