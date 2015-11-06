@@ -220,7 +220,7 @@ class Graphite_broker(BaseModule):
         logger.info("[Graphite] got initial service status: %s", service_id)
 
         if not host_name in self.hosts_cache:
-            logger.error("[Graphite] initial service status, host is unknown: %s.", host_name)
+            logger.error("[Graphite] initial service status, host is unknown: %s.", service_id)
             return
 
         self.services_cache[service_id] = {}
@@ -251,7 +251,7 @@ class Graphite_broker(BaseModule):
 
         # If host and service initial status brokes have not been received, ignore ...
         if host_name not in self.hosts_cache:
-            logger.warning("[Graphite] received service check result for an unknown host: %s", host_name)
+            logger.warning("[Graphite] received service check result for an unknown host: %s", service_id)
             return
         if service_id not in self.services_cache:
             logger.warning("[Graphite] received service check result for an unknown service: %s", service_id)
