@@ -96,6 +96,8 @@ class Graphite_broker(BaseModule):
         # optional perfdatas to be filtered
         self.filtered_metrics = {}
         filters = getattr(modconf, 'filter', [])
+        if type(filters) is 'str':
+            filters = [filters]
         for filter in filters:
             try:
                 filtered_service, filtered_metric = filter.split(':')
