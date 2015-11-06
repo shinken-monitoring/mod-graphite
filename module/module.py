@@ -87,7 +87,7 @@ class Graphite_broker(BaseModule):
             self.ignore_latency_limit = 0
 
         # service name to use for host check
-        self.hostcheck = getattr(modconf, 'hostcheck', None)
+        self.hostcheck = getattr(modconf, 'hostcheck', '')
 
         # optional "sub-folder" in graphite to hold the data of a specific host
         self.graphite_data_source = self.illegal_char_metric.sub('_', getattr(modconf, 'graphite_data_source', ''))
@@ -159,7 +159,7 @@ class Graphite_broker(BaseModule):
                     logger.debug("[Graphite] sent all cached metrics")
                     break
                 except Exception, exp:
-                    logger.error("[mongo-logs] exception: %s", str(exp))
+                    logger.error("[Graphite] exception: %s", str(exp))
             logger.info("[Graphite] time to flush %d cached metrics packet(s) (%2.4f)", commit_count, time() - now)
 
         try:
