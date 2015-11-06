@@ -13,6 +13,8 @@ This version is a refactoring of the previous graphite module which allows:
    - remove pickle communication with Carbon (not very safe ...)
    - maintain a cache for the packets not sent because of connection problems
    - improve configuration features:
+      - configure cache size
+      - configure host check metric name
       - filter metrics warning and critical thresholds
       - filter metrics min and max values
       - filter service/metrics (avoid sending all metrics to Carbon)
@@ -83,7 +85,7 @@ Default configuration file is as is :
       # default: the variable is unset
       #graphite_data_source shinken
 
-      # Optionnaly specify a latency management
+      # Optionally specify a latency management
       # If this parameter is enabled the metric time will be change to remove latency
       # For example if the check was scheduled at 0 but was done at 2,
       # the timestamp associated to the data will be 0
@@ -92,7 +94,7 @@ Default configuration file is as is :
       # default is to ignore latency
       #ignore_latency_limit 15
 
-      # Optionnaly specify a service description for host check metrics
+      # Optionally specify a service description for host check metrics
       #
       # Graphite stores host check metrics in the host directory whereas services
       # are stored in host.service directory. Host check metrics may be stored in their own
@@ -101,18 +103,20 @@ Default configuration file is as is :
       # default: __HOST__
       #hostcheck           __HOST__
 
-      # Optionnaly specify filtered metrics
+      # Optionally specify filtered metrics
       # Filtered metrics will not be sent to Carbon/Graphite
       #
       # Declare a filter parameter for each service to be filtered:
       # filter    service_description:metrics
       #
       # metrics is a comma separated list of the metrics to be filtered
+      # If metrics is an empty list, no metrics witll be sent for the service
       # default: no filtered metrics
       #filter           cpu:1m,5m
       #filter           mem:3z
+      #filter           disk:
 
-      # Optionnaly specify extra metrics
+      # Optionally specify extra metrics
       # warning, critical, min and max information for the metrics are not often necessary
       # in Graphite
       # You may specify which one are to be sent or not

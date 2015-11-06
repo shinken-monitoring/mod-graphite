@@ -12,6 +12,7 @@ This version is a refactoring of the previous graphite module which allows:
    - maintain a cache for the packets not sent because of connection problems
    - improve configuration features:
       - configure cache size
+      - configure host check metric name
       - filter metrics warning and critical thresholds
       - filter metrics min and max values
       - filter service/metrics (avoid sending all metrics to Carbon)
