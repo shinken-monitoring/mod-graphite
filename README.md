@@ -63,3 +63,7 @@ You can set `_GRAPHITE_GROUP` in a specific host template to allow easier filter
 
 For example, declare this custom variable in an hostgroup or an host template.
 
+
+Services specific configuration
+--------------------------------
+Use `_GRAPHITE_POST` in the service configuration to set a postfix to use after the service name.

@@ -21,6 +21,16 @@ This version is a refactoring of the previous graphite module which allows:
       - manage host _GRAPHITE_PRE and service _GRAPHITE_POST to build metric id
       - manage host _GRAPHITE_GROUP as an extra hierarchy level for metrics (easier usage in metrics dashboard)
 
+
+Hosts specific configuration
+--------------------------------
+The `_GRAPHITE_PRE` and `_GRAPHITE_GROUP` defined in the hosts configuration are used to prefix the requested metrics.
+
+
+Services specific configuration
+--------------------------------
+The `_GRAPHITE_POST` defined in the services configuration are used to postfix the requested metrics.
+
 Requirements
 -------------------------
 
