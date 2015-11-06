@@ -89,20 +89,20 @@ class Graphite_broker(BaseModule):
         # service name to use for host check
         self.hostcheck = getattr(modconf, 'hostcheck', '')
 
-        # optional "sub-folder" in graphite to hold the data of a specific host
+        # optional "sub-folder" in graphite to signal shinken data source
         self.graphite_data_source = self.illegal_char_metric.sub('_', getattr(modconf, 'graphite_data_source', ''))
         logger.info("[Graphite] Configuration - Graphite data source: %s", self.graphite_data_source)
 
         # optional perfdatas to be filtered
         self.filtered_metrics = {}
         filters = getattr(modconf, 'filter', [])
-        if type(filters) is 'str':
+        if isinstance(filters, str) or isinstance(filters, unicode):
             filters = [filters]
         for filter in filters:
             try:
                 filtered_service, filtered_metric = filter.split(':')
                 self.filtered_metrics[filtered_service] = []
-                if self.filtered_metrics[filtered_service]:
+                if filtered_metric:
                     self.filtered_metrics[filtered_service] = filtered_metric.split(',')
             except:
                 logger.warning("[Graphite] Configuration - ignoring badly declared filtered metric: %s", filter)
@@ -334,6 +334,9 @@ class Graphite_broker(BaseModule):
         if '_GRAPHITE_PRE' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
+        if self.hostcheck:
+            hname = '.'.join((hname, self.hostcheck))
+
         # Checks latency
         if self.ignore_latency_limit >= b.data['latency'] > 0:
             check_time = int(b.data['last_chk']) - int(b.data['latency'])
@@ -351,10 +354,7 @@ class Graphite_broker(BaseModule):
         lines = []
         # Send a bulk of all metrics at once
         for (metric, value) in couples:
-            if self.hostcheck:
-                lines.append("%s.%s.%s %s %d" % (path, self.hostcheck, metric, value, check_time))
-            else:
-                lines.append("%s.%s %s %d" % (path, metric, value, check_time))
+            lines.append("%s.%s %s %d" % (path, metric, value, check_time))
         lines.append("\n")
         packet = '\n'.join(lines)
 
