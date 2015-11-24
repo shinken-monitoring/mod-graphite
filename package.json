@@ -1,10 +1,10 @@
 {
   "name": "graphite2",
   "types": ["module"],
-  "version": "2.1.2",
+  "version": "2.1.3",
   "homepage": "https://github.com/shinken-monitoring/mod-graphite/tree/refactored",
   "author": "Jean Gabès",
-  "description": "Export host and service performance data to Graphite carbon - version 2",
+  "description": "Export host and service performance data to Graphite carbon - version 2.1.3",
   "contributors": [
     {
       "name": "Jean Gabès",
