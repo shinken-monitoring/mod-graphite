@@ -67,6 +67,9 @@ class Graphite_broker(BaseModule):
         # Specific filter to allow metrics to include '.' for Graphite
         self.illegal_char_metric = compile(r'[^a-zA-Z0-9_.\-]')
 
+        # Specific filter for host and services names for Graphite
+        self.illegal_char_hostname = compile(r'[^a-zA-Z0-9_\-]')
+
         self.host = getattr(modconf, 'host', 'localhost')
         self.port = int(getattr(modconf, 'port', '2003'))
         logger.info("[Graphite] Configuration - host/port: %s:%d", self.host, self.port)
@@ -273,7 +276,7 @@ class Graphite_broker(BaseModule):
             return
 
         # Custom hosts variables
-        hname = self.illegal_char.sub('_', host_name)
+        hname = self.illegal_char_hostname.sub('_', host_name)
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
 
@@ -281,7 +284,7 @@ class Graphite_broker(BaseModule):
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_PRE'], hname))
 
         # Custom services variables
-        desc = self.illegal_char.sub('_', service_description)
+        desc = self.illegal_char_hostname.sub('_', service_description)
         if '_GRAPHITE_POST' in self.services_cache[service_id]:
             desc = ".".join((desc, self.services_cache[service_id]['_GRAPHITE_POST']))
 
@@ -327,7 +330,7 @@ class Graphite_broker(BaseModule):
             return
 
         # Custom hosts variables
-        hname = self.illegal_char.sub('_', host_name)
+        hname = self.illegal_char_hostname.sub('_', host_name)
         if '_GRAPHITE_GROUP' in self.hosts_cache[host_name]:
             hname = ".".join((self.hosts_cache[host_name]['_GRAPHITE_GROUP'], hname))
 
