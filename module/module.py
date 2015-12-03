@@ -29,7 +29,7 @@ backend. http://graphite.wikidot.com/start
 """
 
 from re import compile
-from time import time
+import time
 
 from socket import socket
 from collections import deque
@@ -37,6 +37,15 @@ from collections import deque
 from shinken.basemodule import BaseModule
 from shinken.log import logger
 from shinken.misc.perfdata import PerfDatas
+
+db_available = False
+try:
+    import MySQLdb
+    from MySQLdb import IntegrityError, ProgrammingError, OperationalError
+    logger.info("[Graphite] database library is available")
+    db_available = True
+except ImportError:
+    logger.error("[Graphite] Can not import MySQLdb, install with 'apt-get install python-mysqldb'")
 
 properties = {
     'daemons': ['broker'],
@@ -51,15 +60,56 @@ def get_instance(mod_conf):
     instance = Graphite_broker(mod_conf)
     return instance
 
+def stringify(self, val):
+    """Get a unicode from a value"""
+    # If raw string, go in unicode
+    if isinstance(val, str):
+        val = val.decode('utf8', 'ignore').replace("'", "''")
+    elif isinstance(val, unicode):
+        val = val.replace("'", "''")
+    else:  # other type, we can str
+        val = unicode(str(val))
+        val = val.replace("'", "''")
+    return val
 
 # Class for the Graphite Broker
 # Get broks and send them to a Carbon instance of Graphite
 class Graphite_broker(BaseModule):
+
     def __init__(self, modconf):
         BaseModule.__init__(self, modconf)
 
         self.hosts_cache = {}
         self.services_cache = {}
+
+        # Database storage configuration
+        self.db = None
+        self.db_host = getattr(modconf, 'db_host', None)
+        self.db_port = int(getattr(modconf, 'db_port', '3306'))
+        self.db_user = getattr(modconf, 'db_user', 'shinken')
+        self.db_password = getattr(modconf, 'db_password', 'shinken')
+        self.db_database = getattr(modconf, 'db_database', '')
+        self.db_table = getattr(modconf, 'db_table', '')
+        self.db_character_set = getattr(modconf, 'db_character_set', 'utf8')
+        logger.info("[Graphite] Configuration - database host/port: %s:%d", self.db_host, self.db_port)
+        # Perfdata query
+        # Use \\ where as only one is necessary in SQL ...
+        self.querySelectMetrics = """SELECT `kc`.`id`, `kc`.`counter_name`, `kc`.`regexp_perfdata`, IF(LOCATE("'", `kc`.`regexp_perfdata`)>0, SUBSTRING_INDEX(SUBSTRING(`kc`.`regexp_perfdata`, LOCATE("'", `kc`.`regexp_perfdata`)+1), "'", 1) , 'X') AS metric, `kc`.`counter_type`, `mc`.`name`, `mc`.`description` FROM `glpi_plugin_kiosks_counters` as kc, `glpi_plugin_monitoring_components` as mc WHERE `kc`.`plugin_monitoring_components_id` = `mc`.`id` AND `kc`.`is_active` = 1;"""
+        # Insert query
+        # CREATE TABLE `glpi_plugin_kiosks_metrics` (
+        #   `id` int(11) NOT NULL AUTO_INCREMENT,
+        #   `timestamp` int(11) DEFAULT '0',
+        #   `hostname` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+        #   `service` varchar(255) COLLATE utf8_unicode_ci DEFAULT '',
+        #   `counter` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+        #   `value` decimal(8,2) DEFAULT '0.00',
+        #   `collected` tinyint(1) DEFAULT '0',
+        #   PRIMARY KEY (`id`),
+        #   KEY `timestamp` (`timestamp`)
+        # ) ENGINE=MyISAM AUTO_INCREMENT=5 DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci
+        self.queryInsertCounter = "INSERT INTO `%s`.`%s` (`timestamp`,`hostname`,`service`,`counter`,`value`,`collected`) VALUES ('%s', '%s', '%s', '%s', '%s', '%s');"
+        # Stored metrics
+        self.db_stored_metrics = {}
 
         # Separate perfdata multiple values
         self.multival = compile(r'_(\d+)$')
@@ -80,7 +130,9 @@ class Graphite_broker(BaseModule):
         logger.info('[Graphite] Configuration - maximum cache size: %d packets', self.cache_max_length)
         self.cache_commit_volume = int(getattr(modconf, 'cache_commit_volume', '100'))
         logger.info('[Graphite] Configuration - maximum cache commit volume: %d packets', self.cache_commit_volume)
+        # Carbon and database caches
         self.cache = deque(maxlen=self.cache_max_length)
+        self.db_cache = deque(maxlen=self.cache_max_length)
 
         # Used to reset check time into the scheduled time.
         # Carbon/graphite does not like latency data and creates blanks in graphs
@@ -124,22 +176,95 @@ class Graphite_broker(BaseModule):
         self.send_max = bool(getattr(modconf, 'send_max', False))
         logger.info("[Graphite] Configuration - send max metrics: %d", self.send_max)
 
-    # Called by Broker so we can do init stuff
     def init(self):
-        logger.info("[Graphite] initializing connection to %s:%d ...", str(self.host), self.port)
-        try:
-            self.con = socket()
-            self.con.connect((self.host, self.port))
-        except IOError as e:
-            logger.error("[Graphite] Graphite Carbon instance connexion failed"
-                         " IOError: %s", str(e))
-            # do not raise an exception - logging is enough ...
-            self.con = None
+        """
+        Called by Broker so we can do init stuff
+        """
+        if not self.con:
+            logger.info("[Graphite] initializing Carbon connection to %s:%d ...", str(self.host), self.port)
+            try:
+                self.con = socket()
+                self.con.connect((self.host, self.port))
+            except IOError as e:
+                logger.error("[Graphite] Graphite Carbon instance connexion failed"
+                             " IOError: %s", str(e))
+                # do not raise an exception - logging is enough ...
+                self.con = None
 
-        return self.con
+        logger.info("[Graphite] Database connection: %d ...", db_available)
+        if db_available and self.db_host:
+            if not self.db:
+                logger.info("[Graphite] Connecting to database: %s:%d (%s)", self.db_host, self.db_port, self.db_database)
+                try:
+                    self.db = MySQLdb.connect(host=self.db_host, user=self.db_user,
+                                              passwd=self.db_password, db=self.db_database,
+                                              port=self.db_port)
+                    self.db.set_character_set(self.db_character_set)
+                    self.db_cursor = self.db.cursor()
+                    self.db_cursor.execute('SET NAMES %s;' % self.db_character_set)
+                    self.db_cursor.execute('SET CHARACTER SET %s;' % self.db_character_set)
+                    self.db_cursor.execute('SET character_set_connection=%s;' %
+                                           self.db_character_set)
+                    logger.info("[Graphite] Connected to database")
+                except Exception as e:
+                    logger.error("[Graphite] Graphite database connexion failed"
+                                 " Error: %s", str(e))
+                    # do not raise an exception - logging is enough ...
+                    self.db = None
+                    return
 
-    # Sending data to Carbon. In case of failure, try to reconnect and send again.
+                try:
+                    # Get metrics database configuration
+                    self.db_cursor.execute(self.querySelectMetrics)
+                    logger.debug("[Graphite] got database metrics filtering configuration")
+
+                    for row in self.db_cursor.fetchall():
+                        # row[0] : kiosks_counter.id
+                        # row[1] : kiosks_counter.counter_name
+                        # row[2] : kiosks_counter.regexp_perfdata
+                        # row[3] : metric
+                        # row[4] : kiosks_counter.counter_type
+                        # row[5] : monitoring_components.name
+                        # row[6] : monitoring_components.description
+                        id = row[0]
+                        name = row[1]
+                        regex = row[2]
+                        metric = row[3]
+                        type = row[4]
+                        alias = row[5]
+                        service = row[6]
+                        logger.info("[Graphite] database storable service/metric: %s (%s) / %s", service, alias, metric)
+                        logger.info("[Graphite]  - %s - %s - %s - %s", id, name, regex, type)
+                        # Build a dict organized as:
+                        # 'nsca_reader': {
+                        #    'Powered Cards': {'regex': "'Powered Cards'=(\\d+)c", 'alias': 'Lecteur de cartes', 'type': 'differential', 'id': 6L, 'name': 'cCardsInsertedOk'},
+                        #    'Cards Removed': {'regex': "'Cards Removed'=(\\d+)c", 'alias': 'Lecteur de cartes', 'type': 'differential', 'id': 8L, 'name': 'cCardsRemoved'},
+                        #    'Mute Cards': {'regex': "'Mute Cards'=(\\d+)c", 'alias': 'Lecteur de cartes', 'type': 'differential', 'id': 7L, 'name': 'cCardsInsertedKo'}
+                        # }
+                        if service not in self.db_stored_metrics:
+                            self.db_stored_metrics[service] = {}
+                        self.db_stored_metrics[service].update ({
+                            metric: {
+                                'id': id,
+                                'name': name,
+                                'regex': regex,
+                                'type': type,
+                                'alias': alias
+                            }
+                        })
+                except IntegrityError as exp:
+                    logger.warning("[Graphite] A query raised an integrity error: %s, %s", self.querySelectMetrics, exp)
+                except ProgrammingError as exp:
+                    logger.warning("[Graphite] A query raised a programming error: %s, %s", self.querySelectMetrics, exp)
+                except Exception as exp:
+                    logger.error("[Graphite] database error '%s' when executing query: %s", str(exp), self.querySelectMetrics)
+
+            logger.info("[Graphite] database metrics: %s", self.db_stored_metrics)
+
     def send_packet(self, packet):
+        """
+        Sending data to Carbon. In case of failure, try to reconnect and send again.
+        """
         if not self.con:
             self.init()
 
@@ -153,7 +278,7 @@ class Graphite_broker(BaseModule):
         if self.cache:
             logger.info("[Graphite] %d cached metrics packet(s) to send to Graphite", len(self.cache))
             commit_count = 0
-            now = time()
+            now = time.time()
             while True:
                 try:
                     self.con.sendall(self.cache.popleft())
@@ -165,7 +290,7 @@ class Graphite_broker(BaseModule):
                     break
                 except Exception, exp:
                     logger.error("[Graphite] exception: %s", str(exp))
-            logger.info("[Graphite] time to flush %d cached metrics packet(s) (%2.4f)", commit_count, time() - now)
+            logger.info("[Graphite] time to flush %d cached metrics packet(s) (%2.4f)", commit_count, time.time() - now)
 
         try:
             self.con.sendall(packet)
@@ -179,7 +304,70 @@ class Graphite_broker(BaseModule):
 
         return True
 
+    def db_store(self, records):
+        """
+        Storing data in database
+        """
+        if not db_available:
+            return
+
+        if not self.db:
+            self.init()
+
+        if not self.db:
+            logger.warning("[Graphite] Connection to the database instance is broken!"
+                           " Storing data in module cache ... ")
+            self.db_cache.append(records)
+            logger.warning("[Graphite] cached metrics %d records", len(self.db_cache))
+            return False
+
+        if self.db_cache:
+            logger.info("[Graphite] %d cached metrics packet(s) to send to Graphite", len(self.db_cache))
+            commit_count = 0
+            now = time.time()
+            while True:
+                for query in self.db_cache.popleft():
+                    try:
+                        self.db_cursor.execute(query)
+                        self.db.commit()
+
+                        commit_count = commit_count + 1
+                        if commit_count >= self.cache_commit_volume:
+                            break
+                    except IndexError:
+                        logger.debug("[Graphite] executed all cached queries")
+                        break
+                    except IntegrityError as exp:
+                        logger.warning("[Graphite] A query raised an integrity error: %s, %s", query, exp)
+                        continue
+                    except ProgrammingError as exp:
+                        logger.warning("[Graphite] A query raised a programming error: %s, %s", query, exp)
+                        continue
+                    except Exception as exp:
+                        logger.error("[Graphite] database error '%s' when executing query: %s", str(exp), query)
+
+                logger.info("[Graphite] time to flush %d cached metrics record(s) (%2.4f)", commit_count, time.time() - now)
+
+        for query in records:
+            try:
+                self.db_cursor.execute(query)
+                self.db.commit()
+                logger.info("[Graphite] executed query: %s", query)
+            except IntegrityError as exp:
+                logger.warning("[Graphite] A query raised an integrity error: %s, %s", query, exp)
+                break
+            except ProgrammingError as exp:
+                logger.warning("[Graphite] A query raised a programming error: %s, %s", query, exp)
+                break
+            except Exception as exp:
+                logger.error("[Graphite] database error '%s' when executing query: %s", str(exp), query)
+
+        return True
+
     def get_metric_and_value(self, service, perf_data):
+        """
+        Extract metrics from performance data
+        """
         result = []
         metrics = PerfDatas(perf_data)
 
@@ -217,8 +405,10 @@ class Graphite_broker(BaseModule):
 
         return result
 
-    # Prepare service cache
     def manage_initial_service_status_brok(self, b):
+        """
+        Prepare module services cache
+        """
         host_name = b.data['host_name']
         service_description = b.data['service_description']
         service_id = host_name+"/"+service_description
@@ -234,8 +424,10 @@ class Graphite_broker(BaseModule):
 
         logger.debug("[Graphite] initial service status received: %s", service_id)
 
-    # Prepare host cache
     def manage_initial_host_status_brok(self, b):
+        """
+        Prepare module hosts cache
+        """
         host_name = b.data['host_name']
         logger.info("[Graphite] got initial host status: %s", host_name)
 
@@ -247,8 +439,10 @@ class Graphite_broker(BaseModule):
 
         logger.debug("[Graphite] initial host status received: %s", host_name)
 
-    # A service check result brok has just arrived ...
     def manage_service_check_result_brok(self, b):
+        """
+        A service check result brok has just arrived ...
+        """
         host_name = b.data['host_name']
         service_description = b.data['service_description']
         service_id = host_name+"/"+service_description
@@ -264,7 +458,7 @@ class Graphite_broker(BaseModule):
 
         if service_description in self.filtered_metrics:
             if len(self.filtered_metrics[service_description]) == 0:
-                logger.debug("[Graphite] Ignore service '%s' metrics", service_description)
+                logger.info("[Graphite] Ignore service '%s' metrics", service_description)
                 return
 
         # Decode received metrics
@@ -308,11 +502,33 @@ class Graphite_broker(BaseModule):
             lines.append("%s.%s %s %d" % (path, metric, str(value), check_time))
         lines.append("\n")
         packet = '\n'.join(lines)
-
         self.send_packet(packet)
 
-    # A host check result brok has just arrived, we UPDATE data info with this
+        if self.db_host:
+            # Interested to store service information in DB?
+            if service_description in self.db_stored_metrics:
+                logger.debug("[Graphite] check if anything in DB for service: %s", service_description)
+                records = []
+                for (metric, value) in couples:
+                    # Interested in this metric?
+                    if metric in self.db_stored_metrics[service_description]:
+                        # Append query to records list
+                        records.append(self.queryInsertCounter % (
+                            self.db_database, self.db_table,
+                            check_time, host_name, service_description, metric, value, 0
+                        ))
+                    else:
+                        logger.debug("[Graphite] do not store anything in DB for metric: %s", metric)
+
+                if records:
+                    self.db_store(records)
+            else:
+                logger.debug("[Graphite] do not store anything in DB for service: %s", service_description)
+
     def manage_host_check_result_brok(self, b):
+        """
+        A host check result brok has just arrived, we UPDATE data info with this
+        """
         host_name = b.data['host_name']
         logger.debug("[Graphite] host check result: %s", host_name)
 
@@ -360,14 +576,42 @@ class Graphite_broker(BaseModule):
             lines.append("%s.%s %s %d" % (path, metric, value, check_time))
         lines.append("\n")
         packet = '\n'.join(lines)
-
         self.send_packet(packet)
 
+        if self.db_host:
+            # Interested to store service information in DB?
+            if self.hostcheck in self.db_stored_metrics:
+                logger.debug("[Graphite] check if anything in DB for service: %s", self.hostcheck)
+                records = []
+                for (metric, value) in couples:
+                    # Interested in this metric?
+                    if metric in self.db_stored_metrics[self.hostcheck]:
+                        # Append query to records list
+                        records.append(self.queryInsertCounter % (
+                            self.db_database, self.db_table,
+                            check_time, host_name, self.hostcheck, metric, value, 0
+                        ))
+                    else:
+                        logger.debug("[Graphite] do not store anything in DB for metric: %s", metric)
+
+                if records:
+                    self.db_store(records)
+            else:
+                logger.debug("[Graphite] do not store anything in DB for service: %s", self.hostcheck)
+
     def main(self):
+        """
+        Module main function, get broks from process queue
+        """
         self.set_proctitle(self.name)
         self.set_exit_handler()
         while not self.interrupted:
+            logger.debug("[Graphite] queue length: %s", self.to_q.qsize())
+            now = time.time()
+
             l = self.to_q.get()
             for b in l:
                 b.prepare()
                 self.manage_brok(b)
+
+            logger.debug("[Graphite] time to manage %s broks (%3.4fs)", len(l), time.time() - now)
