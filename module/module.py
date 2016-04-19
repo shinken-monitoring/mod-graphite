@@ -28,7 +28,7 @@ to brok information of the service/host perfdatas into the Graphite
 backend. http://graphite.wikidot.com/start
 """
 
-from re import compile
+from re import compile, search
 import time
 
 from socket import socket
@@ -97,16 +97,18 @@ class Graphite_broker(BaseModule):
         self.querySelectMetrics = """SELECT `kc`.`id`, `kc`.`counter_name`, `kc`.`regexp_perfdata`, IF(LOCATE("'", `kc`.`regexp_perfdata`)>0, SUBSTRING_INDEX(SUBSTRING(`kc`.`regexp_perfdata`, LOCATE("'", `kc`.`regexp_perfdata`)+1), "'", 1) , 'X') AS metric, `kc`.`counter_type`, `mc`.`name`, `mc`.`description` FROM `glpi_plugin_kiosks_counters` as kc, `glpi_plugin_monitoring_components` as mc WHERE `kc`.`plugin_monitoring_components_id` = `mc`.`id` AND `kc`.`is_active` = 1;"""
         # Insert query
         # CREATE TABLE `glpi_plugin_kiosks_metrics` (
-        #   `id` int(11) NOT NULL AUTO_INCREMENT,
-        #   `timestamp` int(11) DEFAULT '0',
-        #   `hostname` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
-        #   `service` varchar(255) COLLATE utf8_unicode_ci DEFAULT '',
-        #   `counter` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
-        #   `value` decimal(8,2) DEFAULT '0.00',
-        #   `collected` tinyint(1) DEFAULT '0',
-        #   PRIMARY KEY (`id`),
-        #   KEY `timestamp` (`timestamp`)
-        # ) ENGINE=MyISAM AUTO_INCREMENT=5 DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci
+        #  `id` int(11) NOT NULL AUTO_INCREMENT,
+        #  `timestamp` int(11) DEFAULT '0',
+        #  `hostname` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+        #  `service` varchar(128) COLLATE utf8_unicode_ci DEFAULT NULL,
+        #  `counter` varchar(128) COLLATE utf8_unicode_ci DEFAULT NULL,
+        #  `value` decimal(8,2) DEFAULT '0.00',
+        #  `collected` tinyint(1) DEFAULT '0',
+        #  PRIMARY KEY (`id`),
+        #  KEY `timestamp` (`timestamp`),
+        #  KEY `hostname` (`hostname`),
+        #  KEY `service_counter` (`service`,`counter`)
+        #) ENGINE=MyISAM AUTO_INCREMENT=11 DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci
         self.queryInsertCounter = "INSERT INTO `%s`.`%s` (`timestamp`,`hostname`,`service`,`counter`,`value`,`collected`) VALUES ('%s', '%s', '%s', '%s', '%s', '%s');"
         # Stored metrics
         self.db_stored_metrics = {}
@@ -233,6 +235,8 @@ class Graphite_broker(BaseModule):
                         type = row[4]
                         alias = row[5]
                         service = row[6]
+                        # Make metric name compliant ...
+                        metric = self.illegal_char_metric.sub('_', metric)
                         logger.info("[Graphite] database storable service/metric: %s (%s) / %s", service, alias, metric)
                         logger.info("[Graphite]  - %s - %s - %s - %s", id, name, regex, type)
                         # Build a dict organized as:
@@ -505,25 +509,27 @@ class Graphite_broker(BaseModule):
         self.send_packet(packet)
 
         if self.db_host:
-            # Interested to store service information in DB?
-            if service_description in self.db_stored_metrics:
-                logger.debug("[Graphite] check if anything in DB for service: %s", service_description)
-                records = []
-                for (metric, value) in couples:
-                    # Interested in this metric?
-                    if metric in self.db_stored_metrics[service_description]:
-                        # Append query to records list
-                        records.append(self.queryInsertCounter % (
-                            self.db_database, self.db_table,
-                            check_time, host_name, service_description, metric, value, 0
-                        ))
-                    else:
-                        logger.debug("[Graphite] do not store anything in DB for metric: %s", metric)
+            try:
+                # Interested to store service information in DB?
+                if service_description in self.db_stored_metrics:
+                    logger.info("[Graphite] check if anything in DB for service: %s", service_description)
+                    records = []
+                    for (metric, value) in couples:
+                        if metric in self.db_stored_metrics[service_description]:
+                            # Append query to records list
+                            records.append(self.queryInsertCounter % (
+                                self.db_database, self.db_table,
+                                check_time, host_name, service_description, self.db_stored_metrics[service_description][metric]["name"], value, 0
+                            ))
+                        else:
+                            logger.info("[Graphite] do not store anything in DB for metric: %s", metric)
 
-                if records:
-                    self.db_store(records)
-            else:
-                logger.debug("[Graphite] do not store anything in DB for service: %s", service_description)
+                    if records:
+                        self.db_store(records)
+                else:
+                    logger.info("[Graphite] do not store anything in DB for service: %s", service_description)
+            except Exception as exp:
+                logger.error("[Graphite] records error '%s': %s", service_id, str(exp))
 
     def manage_host_check_result_brok(self, b):
         """
