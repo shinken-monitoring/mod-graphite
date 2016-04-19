@@ -174,6 +174,7 @@ class Graphite_broker(BaseModule):
             logger.warning("[Graphite] Failed sending data to the Graphite Carbon instance !"
                            " Storing data in module cache ... ")
             self.cache.append(packet)
+            self.con = None
             logger.warning("[Graphite] cached metrics %d packets", len(self.cache))
             return False
 
