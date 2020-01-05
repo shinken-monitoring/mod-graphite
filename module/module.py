@@ -163,7 +163,7 @@ class Graphite_broker(BaseModule):
                 except IndexError:
                     logger.debug("[Graphite] sent all cached metrics")
                     break
-                except Exception, exp:
+                except Exception as exp:
                     logger.error("[Graphite] exception: %s", str(exp))
             logger.info("[Graphite] time to flush %d cached metrics packet(s) (%2.4f)", commit_count, time() - now)
 
